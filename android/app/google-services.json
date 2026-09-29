@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "739573777961",
+    "project_id": "wall-reminder-161",
+    "storage_bucket": "wall-reminder-161.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:739573777961:android:a7248b6030c40e75037e38",
+        "android_client_info": {
+          "package_name": "com.example.wall_reminder_161"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQOz-soPnhZQHbpBT7R1Awzyf8epI2QJk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

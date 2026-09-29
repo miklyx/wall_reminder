@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+backend/reminders.sqlite3
+backend/reminders.sqlite3-shm
+backend/reminders.sqlite3-wal
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+android/.gradle/
+android/local.properties
+android/app/**/key.properties
+android/app/**/*.jks
+android/app/**/*.keystore
