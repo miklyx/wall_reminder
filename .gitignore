@@ -5,6 +5,9 @@ __pycache__/
 backend/reminders.sqlite3
 backend/reminders.sqlite3-shm
 backend/reminders.sqlite3-wal
+backend/*service-account*.json
+backend/firebase-admin*.json
+backend/*firebase-adminsdk*.json
 .dart_tool/
 .packages
 .flutter-plugins

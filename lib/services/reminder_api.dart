@@ -10,6 +10,26 @@ class ReminderApi {
   final AppConfig _config;
   final http.Client _client;
 
+  Future<void> registerFcmToken(String token) async {
+    final response = await _client
+        .post(
+          Uri.parse(_config.apiBaseUrl).resolve('/api/devices/fcm-token'),
+          headers: {
+            'X-API-Key': _config.apiKey,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: jsonEncode({'token': token}),
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ReminderApiException(
+        'FCM token registration failed (HTTP ${response.statusCode})',
+      );
+    }
+  }
+
   Future<void> dismiss(String reminderId) async {
     final response = await _client
         .post(

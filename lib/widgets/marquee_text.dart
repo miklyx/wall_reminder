@@ -35,14 +35,12 @@ class _MarqueeTextState extends State<MarqueeText>
   void didUpdateWidget(covariant MarqueeText oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.text != widget.text || oldWidget.style != widget.style) {
+      _controller.stop();
+      _controller.value = _controller.lowerBound;
       _configuredDuration = null;
     }
-    if (oldWidget.isRunning != widget.isRunning) {
-      if (widget.isRunning) {
-        _controller.repeat();
-      } else {
-        _controller.stop();
-      }
+    if (!widget.isRunning) {
+      _controller.stop();
     }
   }
 
@@ -83,7 +81,7 @@ class _MarqueeTextState extends State<MarqueeText>
 
         final cycleWidth = textWidth + widget.gap;
         final duration = Duration(
-            milliseconds: (cycleWidth / widget.pixelsPerSecond * 1000)
+          milliseconds: (cycleWidth / widget.pixelsPerSecond * 1000)
               .round()
               .clamp(1000, 120000)
               .toInt(),
@@ -91,9 +89,15 @@ class _MarqueeTextState extends State<MarqueeText>
         if (_configuredDuration != duration) {
           _configuredDuration = duration;
           _controller.duration = duration;
-          if (widget.isRunning) _controller.repeat();
         }
-        if (!widget.isRunning && _controller.isAnimating) _controller.stop();
+        if (widget.isRunning && !_controller.isAnimating) {
+          // repeat() needs a duration. Set it above before starting, including
+          // when a short message (which needed no animation) is replaced by a
+          // long queued message.
+          _controller.repeat();
+        } else if (!widget.isRunning && _controller.isAnimating) {
+          _controller.stop();
+        }
 
         return ClipRect(
           child: AnimatedBuilder(
@@ -102,16 +106,21 @@ class _MarqueeTextState extends State<MarqueeText>
               offset: Offset(-cycleWidth * _controller.value, 0),
               child: child,
             ),
-            child: Semantics(
-              label: widget.text,
-              child: ExcludeSemantics(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _messageText(),
-                    SizedBox(width: widget.gap),
-                    _messageText(),
-                  ],
+            child: OverflowBox(
+              alignment: Alignment.centerLeft,
+              minWidth: cycleWidth * 2,
+              maxWidth: cycleWidth * 2,
+              child: Semantics(
+                label: widget.text,
+                child: ExcludeSemantics(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _messageText(),
+                      SizedBox(width: widget.gap),
+                      _messageText(),
+                    ],
+                  ),
                 ),
               ),
             ),

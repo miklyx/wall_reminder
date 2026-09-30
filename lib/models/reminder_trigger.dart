@@ -17,11 +17,16 @@ class ReminderTrigger {
     }
 
     final message = json['message_text'];
-    final duration = json['duration_seconds'];
+    final rawDuration = json['duration_seconds'];
+    final duration = rawDuration is int
+      ? rawDuration
+      : rawDuration is String
+        ? int.tryParse(rawDuration)
+        : null;
     if (message is! String || message.trim().isEmpty) {
       throw const FormatException('Trigger message_text must not be empty');
     }
-    if (duration is! int || duration < 1) {
+    if (duration == null || duration < 1) {
       throw const FormatException('Trigger duration_seconds must be positive');
     }
 

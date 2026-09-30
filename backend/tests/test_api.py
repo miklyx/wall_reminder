@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -102,3 +103,50 @@ def test_due_reminder_is_persisted_and_acknowledged_over_websocket(tmp_path, mon
             headers={"X-API-Key": "test-secret"},
         )
         assert refreshed.json()["status"] == "displayed"
+
+
+def test_fcm_token_registration_and_scheduled_delivery(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "test.sqlite3")
+    monkeypatch.setattr(main, "API_KEY", "test-secret")
+    token = "fcm-device-token-for-test-1234567890"
+    sent_messages = []
+    monkeypatch.setattr(main, "firebase_app", object())
+
+    def fake_send(message, app=None):
+        sent_messages.append((message, app))
+        return "fcm-message-id"
+
+    monkeypatch.setattr(main.messaging, "send", fake_send)
+    with TestClient(main.app) as client:
+        headers = {"X-API-Key": "test-secret"}
+        registered = client.post(
+            "/api/devices/fcm-token",
+            headers=headers,
+            json={"token": token},
+        )
+        assert registered.status_code == 200
+        assert registered.json() == {"status": "registered"}
+
+        created = client.post(
+            "/api/reminders",
+            headers=headers,
+            json={
+                "message_text": "FCM test reminder",
+                "scheduled_time": {
+                    "kind": "timestamp",
+                    "at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+                },
+                "is_active": True,
+                "duration_seconds": 25,
+            },
+        )
+        assert created.status_code == 201
+        main.materialize_due_reminders()
+        asyncio.run(main.send_fcm_pending())
+
+        assert len(sent_messages) == 1
+        message, app = sent_messages[0]
+        assert app is not None
+        assert message.notification.body == "FCM test reminder"
+        assert message.data["type"] == "reminder.trigger"
+        assert message.data["duration_seconds"] == "25"

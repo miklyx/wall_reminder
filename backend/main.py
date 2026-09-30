@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import os
 import sqlite3
 from contextlib import asynccontextmanager
@@ -22,6 +23,8 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
+import firebase_admin
+from firebase_admin import credentials, messaging
 
 from reminder_models import (
     CronSchedule,
@@ -36,8 +39,13 @@ DB_PATH = Path(os.getenv("REMINDER_DB_PATH", str(BASE_DIR / "reminders.sqlite3")
 API_KEY = os.getenv("REMINDER_API_KEY", "")
 POLL_SECONDS = max(1, int(os.getenv("REMINDER_POLL_SECONDS", "1")))
 RETRY_SECONDS = max(5, int(os.getenv("REMINDER_RETRY_SECONDS", "30")))
+FCM_RETRY_SECONDS = max(30, int(os.getenv("FCM_RETRY_SECONDS", "300")))
 BEGIN_IMMEDIATE = "BEGIN IMMEDIATE"
 REMINDER_NOT_FOUND = "Reminder not found"
+# Uvicorn configures this logger for console output; using a module logger here
+# can hide INFO-level startup messages because the root logger defaults to WARNING.
+logger = logging.getLogger("uvicorn.error")
+firebase_app: firebase_admin.App | None = None
 
 
 def utc_now() -> datetime:
@@ -91,8 +99,45 @@ def initialize_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS ix_deliveries_pending
                 ON deliveries(acknowledged_at, last_sent_at);
+            CREATE TABLE IF NOT EXISTS device_tokens (
+                token TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS delivery_push_targets (
+                delivery_id TEXT NOT NULL REFERENCES deliveries(delivery_id) ON DELETE CASCADE,
+                token TEXT NOT NULL REFERENCES device_tokens(token) ON DELETE CASCADE,
+                sent_at TEXT,
+                failed_at TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT NOT NULL,
+                PRIMARY KEY(delivery_id, token)
+            );
+            CREATE INDEX IF NOT EXISTS ix_push_targets_retry
+                ON delivery_push_targets(sent_at, failed_at, next_attempt_at);
             """
         )
+
+
+def initialize_firebase() -> firebase_admin.App | None:
+    """Initialize Firebase Admin using ADC or GOOGLE_APPLICATION_CREDENTIALS."""
+    global firebase_app
+    if firebase_app is not None:
+        return firebase_app
+    try:
+        firebase_app = firebase_admin.get_app()
+    except ValueError:
+        try:
+            firebase_app = firebase_admin.initialize_app(credentials.ApplicationDefault())
+        except Exception as exc:
+            logger.warning(
+                "Firebase Admin could not initialize; FCM delivery is disabled. "
+                "Configure GOOGLE_APPLICATION_CREDENTIALS or application default credentials: %s",
+                exc,
+            )
+            return None
+    logger.info("Firebase Admin initialized; FCM push delivery is enabled")
+    return firebase_app
 
 
 def cron_trigger(schedule: CronSchedule) -> CronTrigger:
@@ -153,6 +198,12 @@ class ImmediatePush(BaseModel):
 
     message_text: str = Field(min_length=1, max_length=2000)
     duration_seconds: int = Field(default=30, gt=0, le=86400)
+
+
+class FCMTokenRegistration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=20, max_length=4096)
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -233,42 +284,126 @@ def materialize_due_reminders() -> None:
         db.commit()
 
 
-async def deliver_pending() -> None:
-    if not hub.connections:
+def stage_fcm_targets() -> None:
+    """Snapshot registered installations for all unacknowledged deliveries."""
+    now_iso = to_utc_iso(utc_now())
+    with connect_db() as db:
+        db.execute(
+            """INSERT OR IGNORE INTO delivery_push_targets
+               (delivery_id, token, next_attempt_at)
+               SELECT d.delivery_id, t.token, ?
+               FROM deliveries d CROSS JOIN device_tokens t
+               WHERE d.acknowledged_at IS NULL""",
+            (now_iso,),
+        )
+
+
+async def send_fcm_pending() -> None:
+    """Send notifications to token targets, retrying transient failures later."""
+    app_instance = firebase_app
+    if app_instance is None:
         return
+
+    stage_fcm_targets()
     now = utc_now()
-    retry_before = to_utc_iso(now - timedelta(seconds=RETRY_SECONDS))
     now_iso = to_utc_iso(now)
+    retry_at = to_utc_iso(now + timedelta(seconds=FCM_RETRY_SECONDS))
     with connect_db() as db:
         db.execute(BEGIN_IMMEDIATE)
         rows = db.execute(
-            """SELECT d.delivery_id, d.reminder_id, d.occurrence_at,
-                      r.message_text, r.duration_seconds, r.scheduled_time_json
-               FROM deliveries d JOIN reminders r ON r.id = d.reminder_id
-               WHERE d.acknowledged_at IS NULL
-                 AND (d.last_sent_at IS NULL OR d.last_sent_at <= ?)
+            """SELECT p.delivery_id, p.token, d.reminder_id, d.occurrence_at,
+                      r.message_text, r.duration_seconds
+               FROM delivery_push_targets p
+               JOIN deliveries d ON d.delivery_id = p.delivery_id
+               JOIN reminders r ON r.id = d.reminder_id
+               WHERE d.acknowledged_at IS NULL AND p.sent_at IS NULL
+                 AND p.failed_at IS NULL AND p.next_attempt_at <= ?
                ORDER BY d.created_at LIMIT 100""",
-            (retry_before,),
+            (now_iso,),
         ).fetchall()
         for row in rows:
             db.execute(
-                "UPDATE deliveries SET last_sent_at = ? WHERE delivery_id = ?",
-                (now_iso, row["delivery_id"]),
+                """UPDATE delivery_push_targets
+                   SET attempts = attempts + 1, next_attempt_at = ?
+                   WHERE delivery_id = ? AND token = ?""",
+                (retry_at, row["delivery_id"], row["token"]),
             )
         db.commit()
+
     for row in rows:
-        schedule_data = json.loads(row["scheduled_time_json"])
-        await hub.broadcast(
-            {
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title="Напоминание",
+                body=row["message_text"],
+            ),
+            data={
                 "type": "reminder.trigger",
                 "delivery_id": row["delivery_id"],
                 "reminder_id": row["reminder_id"],
                 "message_text": row["message_text"],
-                "duration_seconds": row["duration_seconds"],
-                "scheduled_time": schedule_data,
+                "duration_seconds": str(row["duration_seconds"]),
                 "occurrence_at": row["occurrence_at"],
-            }
+            },
+            android=messaging.AndroidConfig(priority="high"),
+            token=row["token"],
         )
+        try:
+            await asyncio.to_thread(messaging.send, message, app=app_instance)
+        except messaging.UnregisteredError:
+            logger.info("Removing unregistered FCM token")
+            with connect_db() as db:
+                db.execute("DELETE FROM device_tokens WHERE token = ?", (row["token"],))
+        except Exception:
+            logger.exception("FCM send failed; target will be retried")
+        else:
+            logger.info("FCM notification accepted for delivery %s", row["delivery_id"])
+            with connect_db() as db:
+                db.execute(
+                    """UPDATE delivery_push_targets SET sent_at = ?
+                       WHERE delivery_id = ? AND token = ?""",
+                    (to_utc_iso(utc_now()), row["delivery_id"], row["token"]),
+                )
+
+
+async def deliver_pending() -> None:
+    now = utc_now()
+    retry_before = to_utc_iso(now - timedelta(seconds=RETRY_SECONDS))
+    now_iso = to_utc_iso(now)
+    # Send FCM before WebSocket: a foreground client may acknowledge the
+    # WebSocket event immediately, but a backgrounded display still needs its
+    # operating-system notification.
+    await send_fcm_pending()
+    if hub.connections:
+        with connect_db() as db:
+            db.execute(BEGIN_IMMEDIATE)
+            rows = db.execute(
+                """SELECT d.delivery_id, d.reminder_id, d.occurrence_at,
+                          r.message_text, r.duration_seconds, r.scheduled_time_json
+                   FROM deliveries d JOIN reminders r ON r.id = d.reminder_id
+                   WHERE d.acknowledged_at IS NULL
+                     AND (d.last_sent_at IS NULL OR d.last_sent_at <= ?)
+                   ORDER BY d.created_at LIMIT 100""",
+                (retry_before,),
+            ).fetchall()
+            for row in rows:
+                db.execute(
+                    "UPDATE deliveries SET last_sent_at = ? WHERE delivery_id = ?",
+                    (now_iso, row["delivery_id"]),
+                )
+            db.commit()
+        for row in rows:
+            schedule_data = json.loads(row["scheduled_time_json"])
+            await hub.broadcast(
+                {
+                    "type": "reminder.trigger",
+                    "delivery_id": row["delivery_id"],
+                    "reminder_id": row["reminder_id"],
+                    "message_text": row["message_text"],
+                    "duration_seconds": row["duration_seconds"],
+                    "scheduled_time": schedule_data,
+                    "occurrence_at": row["occurrence_at"],
+                }
+            )
 
 
 async def scheduler_tick() -> None:
@@ -279,6 +414,7 @@ async def scheduler_tick() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_db()
+    initialize_firebase()
     scheduler.add_job(
         scheduler_tick,
         "interval",
@@ -306,6 +442,19 @@ async def dashboard() -> str:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/devices/fcm-token", dependencies=[Depends(require_api_key)])
+async def register_fcm_token(body: FCMTokenRegistration) -> dict[str, str]:
+    now_iso = to_utc_iso(utc_now())
+    with connect_db() as db:
+        db.execute(
+            """INSERT INTO device_tokens (token, created_at, updated_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(token) DO UPDATE SET updated_at = excluded.updated_at""",
+            (body.token, now_iso, now_iso),
+        )
+    return {"status": "registered"}
 
 
 @app.post("/api/reminders", response_model=ReminderDTO, status_code=201, dependencies=[Depends(require_api_key)])

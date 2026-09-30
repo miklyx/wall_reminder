@@ -20,7 +20,7 @@ class AppConfig {
     final scheme = switch (base.scheme) {
       'https' => 'wss',
       'http' => 'ws',
-      _ => throw FormatException('API_BASE_URL must use http or https'),
+      _ => throw const FormatException('API_BASE_URL must use http or https'),
     };
     return base.replace(scheme: scheme, path: '/ws', query: '', fragment: '');
   }

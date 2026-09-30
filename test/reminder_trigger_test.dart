@@ -17,6 +17,18 @@ void main() {
     expect(trigger.durationSeconds, 30);
   });
 
+  test('parses FCM string-valued reminder duration', () {
+    final trigger = ReminderTrigger.fromJson({
+      'type': 'reminder.trigger',
+      'delivery_id': 'delivery-fcm',
+      'reminder_id': 'reminder-fcm',
+      'message_text': 'Wake up',
+      'duration_seconds': '45',
+    });
+
+    expect(trigger.durationSeconds, 45);
+  });
+
   test('rejects empty messages and invalid duration', () {
     expect(
       () => ReminderTrigger.fromJson({

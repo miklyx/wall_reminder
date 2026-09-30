@@ -9,6 +9,7 @@ import '../config/app_config.dart';
 import '../models/reminder_trigger.dart';
 import '../services/reminder_api.dart';
 import '../services/reminder_connection.dart';
+import '../services/fcm_push_service.dart';
 import '../widgets/marquee_text.dart';
 
 class ReminderDisplayScreen extends StatefulWidget {
@@ -24,6 +25,7 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
     with WidgetsBindingObserver {
   late final ReminderConnection _connection;
   late final ReminderApi _api;
+  late final FcmPushService _fcmPushService;
   StreamSubscription<ReminderTrigger>? _triggerSubscription;
   StreamSubscription<ConnectionStatus>? _statusSubscription;
 
@@ -46,6 +48,8 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
 
     _connection = ReminderConnection(widget.config);
     _api = ReminderApi(widget.config);
+    _fcmPushService = FcmPushService(api: _api, onTrigger: _onTrigger);
+    unawaited(_initializeFcm());
     _connectionStatus = _connection.status;
     _triggerSubscription = _connection.triggers.listen(
       _onTrigger,
@@ -57,6 +61,17 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
       if (mounted) setState(() => _connectionStatus = status);
     });
     _connection.connect();
+  }
+
+  Future<void> _initializeFcm() async {
+    try {
+      await _fcmPushService.initialize();
+    } catch (error) {
+      debugPrint('FCM initialization failed: $error');
+      if (mounted) {
+        setState(() => _feedback = 'Push notifications are unavailable');
+      }
+    }
   }
 
   void _onTrigger(ReminderTrigger trigger) {
@@ -154,6 +169,7 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_triggerSubscription?.cancel());
     unawaited(_statusSubscription?.cancel());
+    unawaited(_fcmPushService.dispose());
     unawaited(_connection.dispose());
     _api.close();
     unawaited(WakelockPlus.disable());
@@ -305,9 +321,9 @@ class _ConnectionIndicator extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.09),
+          color: color.withValues(alpha: 0.09),
           borderRadius: BorderRadius.circular(30),
-          border: Border.all(color: color.withOpacity(0.25)),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
