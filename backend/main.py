@@ -40,6 +40,7 @@ API_KEY = os.getenv("REMINDER_API_KEY", "")
 POLL_SECONDS = max(1, int(os.getenv("REMINDER_POLL_SECONDS", "1")))
 RETRY_SECONDS = max(5, int(os.getenv("REMINDER_RETRY_SECONDS", "30")))
 FCM_RETRY_SECONDS = max(30, int(os.getenv("FCM_RETRY_SECONDS", "300")))
+FIREBASE_PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "wall-reminder-161")
 BEGIN_IMMEDIATE = "BEGIN IMMEDIATE"
 REMINDER_NOT_FOUND = "Reminder not found"
 # Uvicorn configures this logger for console output; using a module logger here
@@ -128,7 +129,10 @@ def initialize_firebase() -> firebase_admin.App | None:
         firebase_app = firebase_admin.get_app()
     except ValueError:
         try:
-            firebase_app = firebase_admin.initialize_app(credentials.ApplicationDefault())
+            firebase_app = firebase_admin.initialize_app(
+                credentials.ApplicationDefault(),
+                options={"projectId": FIREBASE_PROJECT_ID},
+            )
         except Exception as exc:
             logger.warning(
                 "Firebase Admin could not initialize; FCM delivery is disabled. "
@@ -278,8 +282,16 @@ def materialize_due_reminders() -> None:
                 next_run_iso = None
                 active = 0
             db.execute(
-                "UPDATE reminders SET next_run_at = ?, is_active = ?, updated_at = ? WHERE id = ?",
-                (next_run_iso, active, now_iso, row["id"]),
+                """UPDATE reminders
+                   SET next_run_at = ?, is_active = ?, status = ?, updated_at = ?
+                   WHERE id = ?""",
+                (
+                    next_run_iso,
+                    active,
+                    ReminderStatus.pending.value,
+                    now_iso,
+                    row["id"],
+                ),
             )
         db.commit()
 
@@ -567,6 +579,42 @@ async def dismiss_reminder(reminder_id: UUID) -> ReminderDTO:
     return read_reminder(str(reminder_id))  # type: ignore[return-value]
 
 
+@app.post(
+    "/api/deliveries/{delivery_id}/dismiss",
+    status_code=204,
+    dependencies=[Depends(require_api_key)],
+)
+async def dismiss_delivery(delivery_id: UUID) -> None:
+    now_iso = to_utc_iso(utc_now())
+    with connect_db() as db:
+        db.execute(BEGIN_IMMEDIATE)
+        row = db.execute(
+            "SELECT reminder_id FROM deliveries WHERE delivery_id = ?",
+            (str(delivery_id),),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Delivery not found")
+        db.execute(
+            "UPDATE deliveries SET acknowledged_at = ? WHERE delivery_id = ?",
+            (now_iso, str(delivery_id)),
+        )
+        pending = db.execute(
+            """SELECT 1 FROM deliveries
+               WHERE reminder_id = ? AND acknowledged_at IS NULL LIMIT 1""",
+            (row["reminder_id"],),
+        ).fetchone()
+        if pending is None:
+            db.execute(
+                "UPDATE reminders SET status = ?, updated_at = ? WHERE id = ?",
+                (
+                    ReminderStatus.dismissed.value,
+                    now_iso,
+                    row["reminder_id"],
+                ),
+            )
+        db.commit()
+
+
 @app.post("/api/push", response_model=ReminderDTO, status_code=201, dependencies=[Depends(require_api_key)])
 async def push_immediately(body: ImmediatePush) -> ReminderDTO:
     now = utc_now()
@@ -592,7 +640,7 @@ async def reminder_websocket(websocket: WebSocket) -> None:
         while True:
             message = await websocket.receive_json()
             if message.get("type") == "ack" and isinstance(message.get("delivery_id"), str):
-                acknowledge_delivery(message["delivery_id"], ReminderStatus.displayed)
+                acknowledge_delivery(message["delivery_id"], ReminderStatus.received)
             elif message.get("type") == "ping":
                 await websocket.send_json({"type": "pong", "server_time": to_utc_iso(utc_now())})
             else:

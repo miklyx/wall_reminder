@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../config/app_config.dart';
@@ -10,7 +10,9 @@ import '../models/reminder_trigger.dart';
 import '../services/reminder_api.dart';
 import '../services/reminder_connection.dart';
 import '../services/fcm_push_service.dart';
+import '../services/reminder_queue_store.dart';
 import '../widgets/marquee_text.dart';
+import '../widgets/reminder_queue_preview.dart';
 
 class ReminderDisplayScreen extends StatefulWidget {
   const ReminderDisplayScreen({super.key, required this.config});
@@ -26,41 +28,74 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
   late final ReminderConnection _connection;
   late final ReminderApi _api;
   late final FcmPushService _fcmPushService;
+  ReminderQueueStore? _queueStore;
   StreamSubscription<ReminderTrigger>? _triggerSubscription;
   StreamSubscription<ConnectionStatus>? _statusSubscription;
-
-  final Queue<ReminderTrigger> _queue = Queue<ReminderTrigger>();
-  final LinkedHashSet<String> _receivedDeliveryIds = LinkedHashSet<String>();
-
-  ReminderTrigger? _current;
+  ReminderQueueState? _queueState;
+  Timer? _dismissRetryTimer;
+  Duration _dismissRetryDelay = const Duration(seconds: 5);
   ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
   String? _feedback;
   bool _isDismissing = false;
   bool _marqueeStopped = false;
   bool _appIsResumed = true;
   bool _wakeLockEnabled = false;
+  bool _isReady = false;
+  bool _isFlushingDismissals = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky));
+    unawaited(
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky));
 
     _connection = ReminderConnection(widget.config);
     _api = ReminderApi(widget.config);
     _fcmPushService = FcmPushService(api: _api, onTrigger: _onTrigger);
-    unawaited(_initializeFcm());
     _connectionStatus = _connection.status;
     _triggerSubscription = _connection.triggers.listen(
-      _onTrigger,
+      (trigger) => unawaited(_onTrigger(trigger)),
       onError: (Object _) {
-        if (mounted) setState(() => _feedback = 'Invalid reminder event received');
+        if (mounted) {
+          setState(() => _feedback = 'Invalid reminder event received');
+        }
       },
     );
     _statusSubscription = _connection.statuses.listen((status) {
       if (mounted) setState(() => _connectionStatus = status);
+      if (status == ConnectionStatus.connected) {
+        _dismissRetryTimer?.cancel();
+        _dismissRetryTimer = null;
+        _dismissRetryDelay = const Duration(seconds: 5);
+        unawaited(_flushPendingDismissals());
+      }
     });
-    _connection.connect();
+    unawaited(_initialize());
+  }
+
+  Future<void> _initialize() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      final store = await ReminderQueueStore.load(preferences);
+      if (!mounted) return;
+      setState(() {
+        _queueStore = store;
+        _queueState = store.state;
+        _isReady = true;
+      });
+      _connection.connect();
+      unawaited(_initializeFcm());
+      unawaited(_flushPendingDismissals());
+      if (_queueState?.current != null && _appIsResumed) {
+        unawaited(_setWakeLock(true));
+      }
+    } catch (error) {
+      debugPrint('Could not restore the local reminder queue: $error');
+      if (mounted) {
+        setState(() => _feedback = 'Could not restore saved reminders');
+      }
+    }
   }
 
   Future<void> _initializeFcm() async {
@@ -74,30 +109,30 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
     }
   }
 
-  void _onTrigger(ReminderTrigger trigger) {
-    if (!_receivedDeliveryIds.add(trigger.deliveryId)) {
-      if (_current?.deliveryId == trigger.deliveryId) {
-        _connection.acknowledgeDisplayed(trigger.deliveryId);
+  Future<void> _onTrigger(ReminderTrigger trigger) async {
+    final store = _queueStore;
+    if (!_isReady || store == null) return;
+    try {
+      final added = await store.add(trigger);
+      if (!mounted) return;
+      if (added) {
+        setState(() {
+          _queueState = store.state;
+          _feedback = null;
+          _marqueeStopped = false;
+        });
       }
-      return;
-    }
-    while (_receivedDeliveryIds.length > 1000) {
-      _receivedDeliveryIds.remove(_receivedDeliveryIds.first);
-    }
-
-    setState(() {
-      _feedback = null;
-      if (_current == null) {
-        _current = trigger;
-        _marqueeStopped = false;
-      } else {
-        _queue.addLast(trigger);
+      _connection.acknowledgeStored(trigger.deliveryId);
+      if (added &&
+          store.state.current?.deliveryId == trigger.deliveryId &&
+          _appIsResumed) {
+        unawaited(_setWakeLock(true));
       }
-    });
-
-    if (_current?.deliveryId == trigger.deliveryId) {
-      _connection.acknowledgeDisplayed(trigger.deliveryId);
-      unawaited(_setWakeLock(_appIsResumed));
+    } catch (error) {
+      debugPrint('Could not save incoming reminder: $error');
+      if (mounted) {
+        setState(() => _feedback = 'Could not save incoming reminder');
+      }
     }
   }
 
@@ -106,7 +141,10 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
     _appIsResumed = state == AppLifecycleState.resumed;
     if (_appIsResumed) {
       _connection.connect();
-      if (_current != null && !_isDismissing) {
+      _dismissRetryTimer?.cancel();
+      _dismissRetryTimer = null;
+      unawaited(_flushPendingDismissals());
+      if (_queueState?.current != null && !_isDismissing) {
         unawaited(_setWakeLock(true));
       }
     } else {
@@ -133,8 +171,9 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
   }
 
   Future<void> _dismissCurrent() async {
-    final reminder = _current;
-    if (reminder == null || _isDismissing) return;
+    final reminder = _queueState?.current;
+    final store = _queueStore;
+    if (reminder == null || store == null || _isDismissing) return;
 
     setState(() {
       _isDismissing = true;
@@ -144,29 +183,75 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
     await _setWakeLock(false);
 
     try {
-      await _api.dismiss(reminder.reminderId);
+      await store.complete(reminder.deliveryId);
       if (!mounted) return;
       setState(() {
-        _current = _queue.isEmpty ? null : _queue.removeFirst();
+        _queueState = store.state;
         _isDismissing = false;
         _marqueeStopped = false;
       });
-      if (_current != null && _appIsResumed) {
-        _connection.acknowledgeDisplayed(_current!.deliveryId);
+      if (_queueState?.current != null && _appIsResumed) {
         unawaited(_setWakeLock(true));
       }
-    } catch (_) {
+      unawaited(_flushPendingDismissals());
+    } catch (error) {
+      debugPrint('Could not save reminder completion locally: $error');
       if (!mounted) return;
       setState(() {
         _isDismissing = false;
-        _feedback = 'Dismiss was not synced. Tap to retry.';
+        _marqueeStopped = false;
+        _feedback = 'Could not save completion. Please retry.';
       });
+      if (_appIsResumed) unawaited(_setWakeLock(true));
     }
+  }
+
+  Future<void> _flushPendingDismissals() async {
+    final store = _queueStore;
+    if (!_isReady || store == null || _isFlushingDismissals) return;
+    _isFlushingDismissals = true;
+    var failed = false;
+    try {
+      for (final deliveryId
+          in store.state.pendingDismissalDeliveryIds.toList()) {
+        try {
+          await _api.dismissDelivery(deliveryId);
+          await store.markDismissalSynced(deliveryId);
+          if (mounted) setState(() => _queueState = store.state);
+        } catch (error) {
+          debugPrint('Could not sync reminder completion: $error');
+          failed = true;
+        }
+      }
+    } finally {
+      _isFlushingDismissals = false;
+    }
+
+    if (store.state.pendingDismissalDeliveryIds.isEmpty) {
+      _dismissRetryTimer?.cancel();
+      _dismissRetryTimer = null;
+      _dismissRetryDelay = const Duration(seconds: 5);
+    } else if (failed || _dismissRetryTimer == null) {
+      _scheduleDismissRetry();
+    }
+  }
+
+  void _scheduleDismissRetry() {
+    if (_dismissRetryTimer?.isActive == true) return;
+    final delay = _dismissRetryDelay;
+    _dismissRetryDelay = Duration(
+      seconds: (_dismissRetryDelay.inSeconds * 2).clamp(5, 300),
+    );
+    _dismissRetryTimer = Timer(delay, () {
+      _dismissRetryTimer = null;
+      unawaited(_flushPendingDismissals());
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _dismissRetryTimer?.cancel();
     unawaited(_triggerSubscription?.cancel());
     unawaited(_statusSubscription?.cancel());
     unawaited(_fcmPushService.dispose());
@@ -179,96 +264,112 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
 
   @override
   Widget build(BuildContext context) {
-    final reminder = _current;
+    final reminder = _queueState?.current;
     final screen = MediaQuery.sizeOf(context);
-    final messageSize =
-      (screen.shortestSide * 0.105).clamp(42.0, 112.0).toDouble();
+    final messageSize = (screen.height * 0.19).clamp(48.0, 94.0).toDouble();
+    final queuedReminders =
+        _queueState?.reminders.skip(1).toList() ?? const <ReminderTrigger>[];
 
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
       body: SafeArea(
         child: Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: (screen.width * 0.06).clamp(24.0, 88.0).toDouble(),
-            vertical: 20,
+            horizontal: (screen.width * 0.045).clamp(24.0, 72.0).toDouble(),
+            vertical: 10,
           ),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _ConnectionIndicator(status: _connectionStatus),
-              const Spacer(flex: 2),
               if (reminder == null) ...[
-                const Icon(Icons.notifications_none_rounded,
-                    size: 72, color: Color(0xFF526174)),
-                const SizedBox(height: 20),
-                const Text(
-                  'READY FOR REMINDERS',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Color(0xFF8998AA),
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 3,
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.notifications_none_rounded,
+                          size: 64, color: Color(0xFF526174)),
+                      const SizedBox(height: 16),
+                      Text(
+                        _isReady
+                            ? 'READY FOR REMINDERS'
+                            : 'LOADING SAVED REMINDERS',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFF8998AA),
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 3,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ] else ...[
                 const Text(
                   'REMINDER',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Color(0xFF5FE1C0),
-                    fontSize: 18,
+                    fontSize: 15,
                     fontWeight: FontWeight.w800,
-                    letterSpacing: 5,
+                    letterSpacing: 4,
                   ),
                 ),
-                const SizedBox(height: 30),
-                SizedBox(
-                  height: screen.height * 0.34,
-                  width: double.infinity,
+                Expanded(
                   child: Center(
-                    child: MarqueeText(
-                      text: reminder.messageText,
-                      isRunning: _appIsResumed && !_marqueeStopped && !_isDismissing,
-                      style: TextStyle(
-                        color: const Color(0xFFF5F8FC),
-                        fontSize: messageSize,
-                        height: 1.08,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.3,
+                    child: SizedBox(
+                      height: screen.height * 0.30,
+                      width: double.infinity,
+                      child: Center(
+                        child: MarqueeText(
+                          text: reminder.messageText,
+                          isRunning: _appIsResumed &&
+                              !_marqueeStopped &&
+                              !_isDismissing,
+                          style: TextStyle(
+                            color: const Color(0xFFF5F8FC),
+                            fontSize: messageSize,
+                            height: 1.08,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-                if (_queue.isNotEmpty) ...[
-                  const SizedBox(height: 14),
-                  Text(
-                    '${_queue.length} MORE REMINDER${_queue.length == 1 ? '' : 'S'}',
-                    style: const TextStyle(
-                      color: Color(0xFF8998AA),
-                      fontSize: 14,
-                      letterSpacing: 2,
-                      fontWeight: FontWeight.w700,
-                    ),
+                if (queuedReminders.isNotEmpty)
+                  SizedBox(
+                    height: (screen.height * 0.24).clamp(60.0, 104.0),
+                    child: ReminderQueuePreview(reminders: queuedReminders),
                   ),
-                ],
               ],
               if (_feedback != null) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: 6),
                 Text(
                   _feedback!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Color(0xFFFFB4AB), fontSize: 15),
+                  style: const TextStyle(
+                    color: Color(0xFFFFB4AB),
+                    fontSize: 13,
+                  ),
                 ),
               ],
-              const Spacer(flex: 2),
-              if (reminder != null)
+              if (reminder != null) ...[
+                const SizedBox(height: 8),
                 SizedBox(
                   width: double.infinity,
-                  height: 76,
+                  height: 62,
                   child: FilledButton.icon(
                     onPressed: _isDismissing ? null : _dismissCurrent,
                     icon: Icon(
-                      _feedback == null ? Icons.check_circle_outline : Icons.sync,
-                      size: 28,
+                      _feedback == null
+                          ? Icons.check_circle_outline
+                          : Icons.sync,
+                      size: 25,
                     ),
                     label: Text(
                       _isDismissing
@@ -277,9 +378,9 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
                               ? 'DISMISS / DONE'
                               : 'RETRY DISMISS / DONE',
                       style: const TextStyle(
-                        fontSize: 19,
+                        fontSize: 17,
                         fontWeight: FontWeight.w900,
-                        letterSpacing: 1.2,
+                        letterSpacing: 1,
                       ),
                     ),
                     style: FilledButton.styleFrom(
@@ -292,6 +393,7 @@ class _ReminderDisplayScreenState extends State<ReminderDisplayScreen>
                     ),
                   ),
                 ),
+              ],
             ],
           ),
         ),

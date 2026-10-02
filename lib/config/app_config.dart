@@ -24,7 +24,4 @@ class AppConfig {
     };
     return base.replace(scheme: scheme, path: '/ws', query: '', fragment: '');
   }
-
-  Uri dismissUri(String reminderId) =>
-      Uri.parse(apiBaseUrl).resolve('/api/dismiss/$reminderId');
 }

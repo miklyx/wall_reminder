@@ -36,11 +36,12 @@ The compose file mounts the Firebase key read-only and stores SQLite in the pers
 
 ### Enable Firebase Cloud Messaging (FCM)
 
-In Firebase Console, open **Project settings → Service accounts → Firebase Admin SDK** and generate a private key for the server. Store the downloaded JSON outside the repository. For a local FastAPI run, set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path in `backend/.env`. For Docker Compose, set `FIREBASE_ADMIN_KEY_FILE` to its absolute host path in the same file; Compose mounts it read-only and passes the container path to the SDK:
+In Firebase Console, open **Project settings → Service accounts → Firebase Admin SDK** and generate a private key for the server. Store the downloaded JSON outside the repository. For a local FastAPI run, set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path in `backend/.env`. Also set `GOOGLE_CLOUD_PROJECT` to the Firebase Console Project ID (the configured project for this app is `wall-reminder-161`); this is required when Application Default Credentials do not provide a project ID. For Docker Compose, set `FIREBASE_ADMIN_KEY_FILE` to its absolute host path in the same file; Compose mounts it read-only and passes the container path to the SDK:
 
 ```dotenv
 GOOGLE_APPLICATION_CREDENTIALS=/absolute/secure/path/firebase-admin-key.json
 FIREBASE_ADMIN_KEY_FILE=/absolute/secure/path/firebase-admin-key.json
+GOOGLE_CLOUD_PROJECT=wall-reminder-161
 ```
 
 The backend initializes Firebase Admin at startup using Application Default Credentials. Without credentials, REST/WebSocket scheduling still runs, but FCM sending is disabled and a warning is logged. Never put the Admin SDK key in Flutter, `google-services.json`, source control, or a public directory. In production, prefer the host's workload identity/secret manager rather than a downloaded key file. Rotate/revoke a key immediately if it is exposed.
@@ -63,6 +64,7 @@ All `/api/*` endpoints require `X-API-Key: <secret>`.
 - `DELETE /api/reminders/{id}` — delete it (204).
 - `POST /api/devices/fcm-token` — register/update the Flutter installation's FCM token.
 - `POST /api/dismiss/{id}` — confirm dismissal on the device and acknowledge pending deliveries.
+- `POST /api/deliveries/{delivery_id}/dismiss` — idempotently dismiss one delivery (204).
 - `POST /api/push` — create an immediate one-shot reminder (201).
 
 Create body example:
@@ -76,7 +78,7 @@ Create body example:
 }
 ```
 
-Recurring example: `"scheduled_time": {"kind": "cron", "expression": "0 9 * * *", "time_zone": "America/Los_Angeles"}`. Cron is five-field syntax interpreted in the supplied IANA time zone. Timestamp values must include an offset. The response DTO adds the server-generated `id` and current `status` (`pending`, `displayed`, `dismissed`). `is_active` controls future scheduling and becomes false after a one-off fires; recurring schedules remain active.
+Recurring example: `"scheduled_time": {"kind": "cron", "expression": "0 9 * * *", "time_zone": "America/Los_Angeles"}`. Cron is five-field syntax interpreted in the supplied IANA time zone. Timestamp values must include an offset. The response DTO adds the server-generated `id` and current `status` (`pending`, `received`, `displayed`, `dismissed`). `received` means the client durably queued the delivery; `displayed` remains available for older clients. `is_active` controls future scheduling and becomes false after a one-off fires; recurring schedules remain active.
 
 ## WebSocket protocol
 
@@ -96,7 +98,7 @@ On connect, the server sends `{"type":"connected","server_time":"...Z"}`. A sche
 }
 ```
 
-After the client has accepted/displayed the trigger, acknowledge it with `{"type":"ack","delivery_id":"..."}`. The server records status `displayed`. The Android tap/dismiss action should call `POST /api/dismiss/{reminder_id}`. `{"type":"ping"}` receives a `pong`; reconnecting causes unacknowledged events to be sent again. Client code should deduplicate by `delivery_id`, send acknowledgements only after handling the event, and retry dismissal requests safely.
+After the client has durably stored the trigger on the device, acknowledge it with `{"type":"ack","delivery_id":"..."}`. The server records status `received`; this stops WebSocket retries, while the device's local queue remains responsible for displaying and completing it. The Android tap/dismiss action should call `POST /api/dismiss/{reminder_id}`. `{"type":"ping"}` receives a `pong`; reconnecting causes unacknowledged events to be sent again. Client code should deduplicate by `delivery_id`, acknowledge only after local persistence, and retry dismissal requests safely.
 
 ## Delivery and limitations
 

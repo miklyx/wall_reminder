@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -16,6 +17,7 @@ class ReminderConnection {
   final _triggerController = StreamController<ReminderTrigger>.broadcast();
   final _statusController =
       StreamController<ConnectionStatus>.broadcast(sync: true);
+  final Set<String> _pendingAcknowledgements = {};
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _socketSubscription;
@@ -29,7 +31,9 @@ class ReminderConnection {
   ConnectionStatus get status => _status;
 
   void connect() {
-    if (_disposed || _channel != null || _status == ConnectionStatus.connecting) {
+    if (_disposed ||
+        _channel != null ||
+        _status == ConnectionStatus.connecting) {
       return;
     }
     _reconnectTimer?.cancel();
@@ -54,6 +58,7 @@ class ReminderConnection {
         if (_disposed || !identical(_channel, channel)) return;
         _retryAttempt = 0;
         _setStatus(ConnectionStatus.connected);
+        _flushAcknowledgements();
       }).catchError((Object _) => _handleDisconnect(channel));
     } catch (_) {
       _scheduleReconnect();
@@ -75,10 +80,30 @@ class ReminderConnection {
     }
   }
 
-  void acknowledgeDisplayed(String deliveryId) {
+  void acknowledgeStored(String deliveryId) {
+    _pendingAcknowledgements.add(deliveryId);
+    _flushAcknowledgements();
+  }
+
+  void _flushAcknowledgements() {
     final channel = _channel;
     if (channel == null || _status != ConnectionStatus.connected) return;
-    channel.sink.add(jsonEncode({'type': 'ack', 'delivery_id': deliveryId}));
+    for (final deliveryId in _pendingAcknowledgements.toList()) {
+      try {
+        channel.sink.add(jsonEncode({
+          'type': 'ack',
+          'delivery_id': deliveryId,
+        }));
+        _pendingAcknowledgements.remove(deliveryId);
+      } catch (error) {
+        developer.log(
+          'Could not send stored-delivery acknowledgement',
+          error: error,
+          name: 'ReminderConnection',
+        );
+        return;
+      }
+    }
   }
 
   void _handleDisconnect(WebSocketChannel channel) {

@@ -56,6 +56,7 @@ ScheduledTime = Annotated[
 
 class ReminderStatus(str, Enum):
     pending = "pending"
+    received = "received"
     displayed = "displayed"
     dismissed = "dismissed"
 

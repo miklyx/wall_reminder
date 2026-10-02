@@ -19,10 +19,10 @@ class ReminderTrigger {
     final message = json['message_text'];
     final rawDuration = json['duration_seconds'];
     final duration = rawDuration is int
-      ? rawDuration
-      : rawDuration is String
-        ? int.tryParse(rawDuration)
-        : null;
+        ? rawDuration
+        : rawDuration is String
+            ? int.tryParse(rawDuration)
+            : null;
     if (message is! String || message.trim().isEmpty) {
       throw const FormatException('Trigger message_text must not be empty');
     }
@@ -30,11 +30,28 @@ class ReminderTrigger {
       throw const FormatException('Trigger duration_seconds must be positive');
     }
 
+    final deliveryId = json['delivery_id'];
+    final reminderId = json['reminder_id'];
+    if (deliveryId is! String ||
+        deliveryId.isEmpty ||
+        reminderId is! String ||
+        reminderId.isEmpty) {
+      throw const FormatException('Trigger IDs must not be empty');
+    }
+
     return ReminderTrigger(
-      deliveryId: json['delivery_id'] as String,
-      reminderId: json['reminder_id'] as String,
+      deliveryId: deliveryId,
+      reminderId: reminderId,
       messageText: message,
       durationSeconds: duration,
     );
   }
+
+  Map<String, Object> toJson() => {
+        'type': 'reminder.trigger',
+        'delivery_id': deliveryId,
+        'reminder_id': reminderId,
+        'message_text': messageText,
+        'duration_seconds': durationSeconds,
+      };
 }

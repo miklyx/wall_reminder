@@ -11,24 +11,28 @@ import 'reminder_api.dart';
 class FcmPushService {
   FcmPushService({
     required ReminderApi api,
-    required ValueChanged<ReminderTrigger> onTrigger,
+    required Future<void> Function(ReminderTrigger) onTrigger,
     FirebaseMessaging? messaging,
   })  : _api = api,
         _onTrigger = onTrigger,
         _messaging = messaging ?? FirebaseMessaging.instance;
 
   final ReminderApi _api;
-  final ValueChanged<ReminderTrigger> _onTrigger;
+  final Future<void> Function(ReminderTrigger) _onTrigger;
   final FirebaseMessaging _messaging;
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   bool _disposed = false;
 
   Future<void> initialize() async {
     _subscriptions.add(
-      FirebaseMessaging.onMessage.listen(_handleMessage),
+      FirebaseMessaging.onMessage.listen(
+        (message) => unawaited(_handleMessage(message)),
+      ),
     );
     _subscriptions.add(
-      FirebaseMessaging.onMessageOpenedApp.listen(_handleMessage),
+      FirebaseMessaging.onMessageOpenedApp.listen(
+        (message) => unawaited(_handleMessage(message)),
+      ),
     );
 
     final settings = await _messaging.requestPermission(
@@ -49,7 +53,7 @@ class FcmPushService {
     );
 
     final initialMessage = await _messaging.getInitialMessage();
-    if (initialMessage != null) _handleMessage(initialMessage);
+    if (initialMessage != null) await _handleMessage(initialMessage);
   }
 
   Future<void> _registerCurrentToken() async {
@@ -73,14 +77,16 @@ class FcmPushService {
     }
   }
 
-  void _handleMessage(RemoteMessage message) {
+  Future<void> _handleMessage(RemoteMessage message) async {
     if (_disposed || message.data['type'] != 'reminder.trigger') return;
     try {
-      _onTrigger(ReminderTrigger.fromJson(message.data));
+      await _onTrigger(ReminderTrigger.fromJson(message.data));
     } on FormatException catch (error) {
       debugPrint('Ignoring invalid FCM reminder payload: $error');
     } on TypeError catch (error) {
       debugPrint('Ignoring invalid FCM reminder payload: $error');
+    } catch (error) {
+      debugPrint('Could not save incoming FCM reminder: $error');
     }
   }
 

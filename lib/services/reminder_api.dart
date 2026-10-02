@@ -5,7 +5,8 @@ import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 
 class ReminderApi {
-  ReminderApi(this._config, {http.Client? client}) : _client = client ?? http.Client();
+  ReminderApi(this._config, {http.Client? client})
+      : _client = client ?? http.Client();
 
   final AppConfig _config;
   final http.Client _client;
@@ -30,16 +31,15 @@ class ReminderApi {
     }
   }
 
-  Future<void> dismiss(String reminderId) async {
-    final response = await _client
-        .post(
-          _config.dismissUri(reminderId),
-          headers: {
-            'X-API-Key': _config.apiKey,
-            'Accept': 'application/json',
-          },
-        )
-        .timeout(const Duration(seconds: 10));
+  Future<void> dismissDelivery(String deliveryId) async {
+    final response = await _client.post(
+      Uri.parse(_config.apiBaseUrl)
+          .resolve('/api/deliveries/$deliveryId/dismiss'),
+      headers: {
+        'X-API-Key': _config.apiKey,
+        'Accept': 'application/json',
+      },
+    ).timeout(const Duration(seconds: 10));
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       var detail = 'HTTP ${response.statusCode}';
@@ -50,6 +50,9 @@ class ReminderApi {
         }
       } on FormatException {
         // Use the HTTP status when the backend response is not JSON.
+      }
+      if (response.statusCode == 404 && detail == 'Delivery not found') {
+        return;
       }
       throw ReminderApiException(detail);
     }

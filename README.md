@@ -41,10 +41,11 @@ FCM provides delivery notifications but Android does not guarantee that a push t
 
 ## Behavior
 
-- Incoming `reminder.trigger` events are queued and acknowledged as `displayed` over the WebSocket when shown, stopping server retries for that delivery.
-- `DISMISS / DONE` pauses the marquee, releases WakeLock, then calls `POST /api/dismiss/{reminder_id}`. On failure, the message remains visible and can be retried.
+- Incoming reminders, the active queue, and pending completion syncs are persisted on-device. The app acknowledges a delivery only after saving it locally.
+- `DISMISS / DONE` pauses the marquee, releases WakeLock, saves completion locally, and immediately advances to the next reminder. Backend dismissal sync runs separately with retries and does not block the display.
+- The display is locked to landscape. The active reminder uses large text; queued reminders appear beneath it as smaller message previews.
 - WakeLock is disabled when the app leaves the resumed lifecycle state and re-enabled for an active reminder when resumed.
-- WebSocket retries use bounded exponential backoff. FCM notification taps and foreground pushes are also handled; the client deduplicates delivery IDs during its process lifetime.
+- WebSocket retries use bounded exponential backoff. FCM notification taps and foreground pushes are also handled; the client deduplicates recently received delivery IDs across restarts.
 
 FCM is the fallback when Android suspends the WebSocket. The OS displays a notification while the app is in the background; the user generally needs to tap it to open the full-screen message. This app does not change screen brightness. `wakelock_plus` prevents normal display sleep while enabled, but kiosk/pin mode and OEM battery policies may need separate device configuration.
 
