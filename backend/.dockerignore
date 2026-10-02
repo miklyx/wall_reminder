@@ -1,0 +1,13 @@
+.venv
+__pycache__
+.pytest_cache
+*.py[cod]
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+.env
+secrets
+service-account*.json
+*firebase-adminsdk*.json
+tests
+README.md

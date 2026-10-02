@@ -8,6 +8,7 @@ backend/reminders.sqlite3-wal
 backend/*service-account*.json
 backend/firebase-admin*.json
 backend/*firebase-adminsdk*.json
+backend/.env
 .dart_tool/
 .packages
 .flutter-plugins

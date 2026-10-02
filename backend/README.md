@@ -17,6 +17,22 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 The API refuses protected operations and WebSocket sessions until `REMINDER_API_KEY` is configured. Optionally set `REMINDER_DB_PATH` to choose the SQLite file, `REMINDER_POLL_SECONDS` (default 1) for scheduler polling, and `REMINDER_RETRY_SECONDS` (default 30) for unacknowledged WebSocket resend interval. Keep the database on durable storage. Use HTTPS/WSS via a trusted reverse proxy when accessed outside a trusted LAN; do not expose the unauthenticated health endpoint as an operational status feed if that matters to your deployment.
 
+## Docker deployment (VPS or Docker host)
+
+This backend uses a continuously running APScheduler, SQLite, and an in-memory WebSocket hub. It is designed as a single long-lived process, not as a Vercel serverless function. **Vercel does not deploy this Dockerfile/Compose service as a persistent container**; its serverless runtime can suspend between requests, does not provide durable local SQLite storage, and is not suitable for this scheduler/WebSocket hub. Use a VPS or container host with persistent disk and inbound HTTPS/WSS. For Vercel, the backend would need an architectural redesign (external database/queue, externally invoked scheduled jobs, and a separate supported push delivery path).
+
+On a Docker host, copy `.env.example` to `.env`, set a strong API key and the absolute host path to the Firebase Admin SDK JSON, then start the container:
+
+```sh
+cd backend
+cp .env.example .env
+# Edit .env and set REMINDER_API_KEY and FIREBASE_ADMIN_KEY_FILE.
+docker compose up --build -d
+docker compose logs -f reminder-api
+```
+
+The compose file mounts the Firebase key read-only and stores SQLite in the persistent `reminder_data` Docker volume. Do not commit `.env` or the service-account JSON. The API listens on port 8000; put a TLS reverse proxy in front for public access so Flutter can use HTTPS/WSS. Run exactly one replica: multiple server processes would each run a scheduler and maintain separate in-memory WebSocket connections. Stop with `docker compose down`; the named database volume remains. To remove data too, explicitly remove the volume (`docker compose down -v`).
+
 ### Enable Firebase Cloud Messaging (FCM)
 
 In Firebase Console, open **Project settings → Service accounts → Firebase Admin SDK** and generate a private key for the server. Store the downloaded JSON outside the repository, then configure its absolute path before starting FastAPI:
