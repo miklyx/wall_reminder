@@ -11,11 +11,12 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-export REMINDER_API_KEY='replace-with-a-long-random-secret'
-uvicorn main:app --host 0.0.0.0 --port 8000
+cp .env.example .env
+# Edit .env and set a strong REMINDER_API_KEY.
+uvicorn main:app --env-file .env --host 0.0.0.0 --port 8000
 ```
 
-The API refuses protected operations and WebSocket sessions until `REMINDER_API_KEY` is configured. Optionally set `REMINDER_DB_PATH` to choose the SQLite file, `REMINDER_POLL_SECONDS` (default 1) for scheduler polling, and `REMINDER_RETRY_SECONDS` (default 30) for unacknowledged WebSocket resend interval. Keep the database on durable storage. Use HTTPS/WSS via a trusted reverse proxy when accessed outside a trusted LAN; do not expose the unauthenticated health endpoint as an operational status feed if that matters to your deployment.
+The API refuses protected operations and WebSocket sessions until `REMINDER_API_KEY` is configured. Local startup reads settings from `backend/.env`; `.env` is git-ignored. Configure `REMINDER_DB_PATH` to choose the SQLite file, `REMINDER_POLL_SECONDS` (default 1) for scheduler polling, and `REMINDER_RETRY_SECONDS` (default 30) for unacknowledged WebSocket resend interval. Keep the database on durable storage. Use HTTPS/WSS via a trusted reverse proxy when accessed outside a trusted LAN; do not expose the unauthenticated health endpoint as an operational status feed if that matters to your deployment.
 
 ## Docker deployment (VPS or Docker host)
 
@@ -35,10 +36,11 @@ The compose file mounts the Firebase key read-only and stores SQLite in the pers
 
 ### Enable Firebase Cloud Messaging (FCM)
 
-In Firebase Console, open **Project settings → Service accounts → Firebase Admin SDK** and generate a private key for the server. Store the downloaded JSON outside the repository, then configure its absolute path before starting FastAPI:
+In Firebase Console, open **Project settings → Service accounts → Firebase Admin SDK** and generate a private key for the server. Store the downloaded JSON outside the repository. For a local FastAPI run, set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path in `backend/.env`. For Docker Compose, set `FIREBASE_ADMIN_KEY_FILE` to its absolute host path in the same file; Compose mounts it read-only and passes the container path to the SDK:
 
-```sh
-export GOOGLE_APPLICATION_CREDENTIALS="/absolute/secure/path/firebase-admin-key.json"
+```dotenv
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/secure/path/firebase-admin-key.json
+FIREBASE_ADMIN_KEY_FILE=/absolute/secure/path/firebase-admin-key.json
 ```
 
 The backend initializes Firebase Admin at startup using Application Default Credentials. Without credentials, REST/WebSocket scheduling still runs, but FCM sending is disabled and a warning is logged. Never put the Admin SDK key in Flutter, `google-services.json`, source control, or a public directory. In production, prefer the host's workload identity/secret manager rather than a downloaded key file. Rotate/revoke a key immediately if it is exposed.

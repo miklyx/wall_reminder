@@ -2,6 +2,7 @@
 __pycache__/
 .pytest_cache/
 *.py[cod]
+
 backend/reminders.sqlite3
 backend/reminders.sqlite3-shm
 backend/reminders.sqlite3-wal
