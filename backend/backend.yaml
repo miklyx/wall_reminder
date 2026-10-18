@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: android-reminder-backend
+  namespace: android-reminder
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: android-reminder-backend
+  template:
+    metadata:
+      labels:
+        app: android-reminder-backend
+    spec:
+      containers:
+      - name: backend
+        image: backend-reminder-api:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000
+        env:
+        - name: REMINDER_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: android-reminder-backend
+              key: REMINDER_API_KEY
+        - name: REMINDER_DB_PATH
+          value: /data/reminders.sqlite3
+        - name: NODE_ENV
+          value: "production"
+        volumeMounts:
+        - name: reminder-data
+          mountPath: /data
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+      volumes:
+      - name: reminder-data
+        persistentVolumeClaim:
+          claimName: android-reminder-backend-data
+  revisionHistoryLimit: 2
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: android-reminder-backend-data
+  namespace: android-reminder
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: android-reminder-backend-service
+  namespace: android-reminder
+spec:
+  type: ClusterIP
+  selector:
+    app: android-reminder-backend
+  ports:
+  - port: 80
+    targetPort: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: android-reminder-backend-ingress
+  namespace: android-reminder
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: android-reminder-backend-service
+            port:
+              number: 80
+      - path: /ws
+        pathType: Prefix
+        backend:
+          service:
+            name: android-reminder-backend-service
+            port:
+              number: 80
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: android-reminder-backend-service
+            port:
+              number: 80
