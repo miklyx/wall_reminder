@@ -5,8 +5,6 @@ metadata:
   namespace: android-reminder
 spec:
   replicas: 1
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
       app: android-reminder-backend
@@ -15,13 +13,17 @@ spec:
       labels:
         app: android-reminder-backend
     spec:
+      imagePullSecrets:
+      - name: ghcr-secret
       containers:
-      - name: backend
-        image: backend-reminder-api:latest
-        imagePullPolicy: Never
+      - name: android-reminder-backend
+        image: ghcr.io/miklyx/wall_reminder/backend:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
         env:
+        - name: NODE_ENV
+          value: "production"
         - name: REMINDER_API_KEY
           valueFrom:
             secretKeyRef:
@@ -29,36 +31,28 @@ spec:
               key: REMINDER_API_KEY
         - name: REMINDER_DB_PATH
           value: /data/reminders.sqlite3
-        - name: NODE_ENV
-          value: "production"
+        - name: GOOGLE_CLOUD_PROJECT
+          value: wall-reminder-161
+        - name: REMINDER_POLL_SECONDS
+          value: "1"
+        - name: REMINDER_RETRY_SECONDS
+          value: "30"
+        - name: FCM_RETRY_SECONDS
+          value: "300"
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/run/secrets/firebase-admin/firebase-admin.json
         volumeMounts:
-        - name: reminder-data
-          mountPath: /data
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8000
+        - name: firebase-admin
+          mountPath: /var/run/secrets/firebase-admin
+          readOnly: true
       volumes:
-      - name: reminder-data
-        persistentVolumeClaim:
-          claimName: android-reminder-backend-data
-  revisionHistoryLimit: 2
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: android-reminder-backend-data
-  namespace: android-reminder
-spec:
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
+      - name: firebase-admin
+        secret:
+          secretName: firebase-admin
+          optional: true
+          items:
+          - key: firebase-admin.json
+            path: firebase-admin.json
 ---
 apiVersion: v1
 kind: Service
@@ -82,20 +76,6 @@ spec:
   rules:
   - http:
       paths:
-      - path: /api
-        pathType: Prefix
-        backend:
-          service:
-            name: android-reminder-backend-service
-            port:
-              number: 80
-      - path: /ws
-        pathType: Prefix
-        backend:
-          service:
-            name: android-reminder-backend-service
-            port:
-              number: 80
       - path: /
         pathType: Prefix
         backend:

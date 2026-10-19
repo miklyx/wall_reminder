@@ -39,7 +39,7 @@ jobs:
             type=raw,value=latest
             type=sha,format=short
 
-      - name: Set up QEMU (для сборки под ARM64 / Raspberry Pi)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
