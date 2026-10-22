@@ -11,7 +11,13 @@ flutter pub get
 flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=API_KEY=your-server-key
 ```
 
-`10.0.2.2` is the Android Emulator alias for the host machine. On a physical Mi A3, use the backend computer's reachable LAN address instead, e.g. `http://192.168.1.20:8000`. For non-local networks, use HTTPS/WSS through a trusted TLS reverse proxy. The API key is compiled into the app; distribute builds only to trusted devices and rotate the key if the app package is exposed. Do not use the development key for a public server.
+`10.0.2.2` is the Android Emulator alias for the host machine. On a physical device using the Raspberry Pi deployment, set `API_BASE_URL=http://192.168.178.29/android-reminder`; the app preserves this prefix for both REST and WebSocket requests. For another local backend, use its reachable LAN address, including any configured path prefix. For non-local networks, use HTTPS/WSS through a trusted TLS reverse proxy. The API key is compiled into the app; distribute builds only to trusted devices and rotate the key if the app package is exposed. Do not use the development key for a public server.
+
+Build or run for the Raspberry Pi with:
+
+```sh
+flutter run --dart-define=API_BASE_URL=http://192.168.178.29/android-reminder --dart-define=API_KEY=your-server-key
+```
 
 Android may block unencrypted HTTP for modern target SDKs. Prefer HTTPS/WSS; if using plain HTTP on a trusted development LAN, explicitly allow cleartext traffic in the generated Android app manifest for development only, and do not ship that setting in a public release.
 

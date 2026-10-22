@@ -15,6 +15,12 @@ class AppConfig {
   final String apiBaseUrl;
   final String apiKey;
 
+  Uri resolveApiUri(String relativePath) {
+    final base = Uri.parse(apiBaseUrl);
+    final basePath = base.path.endsWith('/') ? base.path : '${base.path}/';
+    return base.replace(path: basePath).resolve(relativePath);
+  }
+
   Uri get webSocketUri {
     final base = Uri.parse(apiBaseUrl);
     final scheme = switch (base.scheme) {
@@ -22,6 +28,13 @@ class AppConfig {
       'http' => 'ws',
       _ => throw const FormatException('API_BASE_URL must use http or https'),
     };
-    return base.replace(scheme: scheme, path: '/ws', query: '', fragment: '');
+    final basePath = base.path.endsWith('/') ? base.path : '${base.path}/';
+    return Uri(
+      scheme: scheme,
+      userInfo: base.userInfo.isEmpty ? null : base.userInfo,
+      host: base.host,
+      port: base.hasPort ? base.port : null,
+      path: '${basePath}ws',
+    );
   }
 }

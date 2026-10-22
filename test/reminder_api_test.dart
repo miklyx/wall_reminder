@@ -7,6 +7,39 @@ import 'package:wall_reminder_display/config/app_config.dart';
 import 'package:wall_reminder_display/services/reminder_api.dart';
 
 void main() {
+  test('API and WebSocket URLs preserve a configured path prefix', () {
+    const config = AppConfig(
+      apiBaseUrl: 'http://192.168.178.29/android-reminder',
+      apiKey: 'test-key',
+    );
+
+    expect(
+      config.resolveApiUri('api/devices/fcm-token').toString(),
+      'http://192.168.178.29/android-reminder/api/devices/fcm-token',
+    );
+    expect(
+      config.webSocketUri.toString(),
+      'ws://192.168.178.29/android-reminder/ws',
+    );
+  });
+
+  test('API and WebSocket URLs work with a trailing slash in the base URL',
+      () {
+    const config = AppConfig(
+      apiBaseUrl: 'https://reminders.example.test/android-reminder/',
+      apiKey: 'test-key',
+    );
+
+    expect(
+      config.resolveApiUri('api/push').toString(),
+      'https://reminders.example.test/android-reminder/api/push',
+    );
+    expect(
+      config.webSocketUri.toString(),
+      'wss://reminders.example.test/android-reminder/ws',
+    );
+  });
+
   test('dismiss sync targets one delivery and treats missing delivery as done',
       () async {
     http.Request? capturedRequest;
@@ -72,6 +105,28 @@ void main() {
     await expectLater(
       api.dismissDelivery('delivery-1'),
       throwsA(isA<ReminderApiException>()),
+    );
+  });
+
+  test('FCM token registration retains the configured path prefix', () async {
+    http.Request? capturedRequest;
+    final api = ReminderApi(
+      const AppConfig(
+        apiBaseUrl: 'http://192.168.178.29/android-reminder',
+        apiKey: 'test-key',
+      ),
+      client: MockClient((request) async {
+        capturedRequest = request;
+        return http.Response('', 204);
+      }),
+    );
+    addTearDown(api.close);
+
+    await api.registerFcmToken('token');
+
+    expect(
+      capturedRequest?.url.path,
+      '/android-reminder/api/devices/fcm-token',
     );
   });
 }

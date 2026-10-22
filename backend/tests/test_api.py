@@ -80,6 +80,14 @@ def test_auth_required(tmp_path, monkeypatch):
         assert client.get("/api/reminders").status_code == 401
 
 
+def test_dashboard_push_url_preserves_path_prefix():
+    with TestClient(main.app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert "const path=window.location.pathname;const apiPath=(path.endsWith('/')?path.slice(0,-1):path)+'/api/push'" in response.text
+
+
 def test_immediate_push_creates_due_reminder(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "test.sqlite3")
     monkeypatch.setattr(main, "API_KEY", "test-secret")

@@ -72,14 +72,27 @@ kind: Ingress
 metadata:
   name: android-reminder-backend-ingress
   namespace: android-reminder
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: android-reminder-strip-reminder-prefix@kubernetescrd
 spec:
+  ingressClassName: traefik
   rules:
   - http:
       paths:
-      - path: /
+      - path: /android-reminder
         pathType: Prefix
         backend:
           service:
             name: android-reminder-backend-service
             port:
               number: 80
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-reminder-prefix
+  namespace: android-reminder
+spec:
+  stripPrefix:
+    prefixes:
+    - /android-reminder

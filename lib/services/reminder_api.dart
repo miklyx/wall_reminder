@@ -14,7 +14,7 @@ class ReminderApi {
   Future<void> registerFcmToken(String token) async {
     final response = await _client
         .post(
-          Uri.parse(_config.apiBaseUrl).resolve('/api/devices/fcm-token'),
+          _config.resolveApiUri('api/devices/fcm-token'),
           headers: {
             'X-API-Key': _config.apiKey,
             'Content-Type': 'application/json',
@@ -33,8 +33,7 @@ class ReminderApi {
 
   Future<void> dismissDelivery(String deliveryId) async {
     final response = await _client.post(
-      Uri.parse(_config.apiBaseUrl)
-          .resolve('/api/deliveries/$deliveryId/dismiss'),
+      _config.resolveApiUri('api/deliveries/$deliveryId/dismiss'),
       headers: {
         'X-API-Key': _config.apiKey,
         'Accept': 'application/json',
