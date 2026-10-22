@@ -9,17 +9,17 @@ import 'package:wall_reminder_display/services/reminder_api.dart';
 void main() {
   test('API and WebSocket URLs preserve a configured path prefix', () {
     const config = AppConfig(
-      apiBaseUrl: 'http://192.168.178.29/android-reminder',
+      apiBaseUrl: 'http://reminder.example.test/android-reminder',
       apiKey: 'test-key',
     );
 
     expect(
       config.resolveApiUri('api/devices/fcm-token').toString(),
-      'http://192.168.178.29/android-reminder/api/devices/fcm-token',
+      'http://reminder.example.test/android-reminder/api/devices/fcm-token',
     );
     expect(
       config.webSocketUri.toString(),
-      'ws://192.168.178.29/android-reminder/ws',
+      'ws://reminder.example.test/android-reminder/ws',
     );
   });
 
@@ -112,7 +112,7 @@ void main() {
     http.Request? capturedRequest;
     final api = ReminderApi(
       const AppConfig(
-        apiBaseUrl: 'http://192.168.178.29/android-reminder',
+        apiBaseUrl: 'http://reminder.example.test/android-reminder',
         apiKey: 'test-key',
       ),
       client: MockClient((request) async {

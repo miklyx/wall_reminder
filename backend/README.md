@@ -34,25 +34,6 @@ docker compose logs -f reminder-api
 
 The compose file mounts the Firebase key read-only and stores SQLite in the persistent `reminder_data` Docker volume. Do not commit `.env` or the service-account JSON. The API listens on port 8000; put a TLS reverse proxy in front for public access so Flutter can use HTTPS/WSS. Run exactly one replica: multiple server processes would each run a scheduler and maintain separate in-memory WebSocket connections. Stop with `docker compose down`; the named database volume remains. To remove data too, explicitly remove the volume (`docker compose down -v`).
 
-## Raspberry Pi Kubernetes ingress
-
-The Raspberry Pi runs Pi-hole natively, with its web server on port `8081`; DNS remains served by Pi-hole on port `53`. `pihole-ingress.yaml` exposes only the web UI through Traefik at `http://192.168.178.29/pi-hole/` and redirects the short path to the Pi-hole admin UI. It uses a static Kubernetes EndpointSlice for the Pi's LAN address, so keep that address reserved in the router and update the EndpointSlice if it changes.
-
-For Pi-hole v6, keep `webserver.paths.webhome` at `/admin/` and set `webserver.paths.prefix` to `/pi-hole`. Traefik strips `/pi-hole` before forwarding requests. On the Pi, the settings can be applied with:
-
-```sh
-sudo pihole-FTL --config webserver.paths.webhome "/admin/"
-sudo pihole-FTL --config webserver.paths.prefix "/pi-hole"
-```
-
-Apply the ingress manifest from a machine with the cluster's `kubectl` context:
-
-```sh
-kubectl apply -f backend/pihole-ingress.yaml
-```
-
-This route does not expose DNS over Traefik or change the router's DNS configuration.
-
 ### Enable Firebase Cloud Messaging (FCM)
 
 In Firebase Console, open **Project settings → Service accounts → Firebase Admin SDK** and generate a private key for the server. Store the downloaded JSON outside the repository. For a local FastAPI run, set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path in `backend/.env`. Also set `GOOGLE_CLOUD_PROJECT` to the Firebase Console Project ID (the configured project for this app is `wall-reminder-161`); this is required when Application Default Credentials do not provide a project ID. For Docker Compose, set `FIREBASE_ADMIN_KEY_FILE` to its absolute host path in the same file; Compose mounts it read-only and passes the container path to the SDK:
