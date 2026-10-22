@@ -31,6 +31,8 @@ spec:
               key: REMINDER_API_KEY
         - name: REMINDER_DB_PATH
           value: /data/reminders.sqlite3
+        - name: REMINDER_ROOT_PATH
+          value: /android-reminder
         - name: GOOGLE_CLOUD_PROJECT
           value: wall-reminder-161
         - name: REMINDER_POLL_SECONDS

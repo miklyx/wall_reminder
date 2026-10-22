@@ -37,6 +37,7 @@ from reminder_models import (
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("REMINDER_DB_PATH", str(BASE_DIR / "reminders.sqlite3")))
 API_KEY = os.getenv("REMINDER_API_KEY", "")
+ROOT_PATH = os.getenv("REMINDER_ROOT_PATH", "")
 POLL_SECONDS = max(1, int(os.getenv("REMINDER_POLL_SECONDS", "1")))
 RETRY_SECONDS = max(5, int(os.getenv("REMINDER_RETRY_SECONDS", "30")))
 FCM_RETRY_SECONDS = max(30, int(os.getenv("FCM_RETRY_SECONDS", "300")))
@@ -443,7 +444,12 @@ async def lifespan(_: FastAPI):
         scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="Wall Reminder API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Wall Reminder API",
+    version="1.0.0",
+    lifespan=lifespan,
+    root_path=ROOT_PATH,
+)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
